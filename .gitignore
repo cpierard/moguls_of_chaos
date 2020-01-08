@@ -1,2 +1,4 @@
 .ipynb_checkpoints/
 *.gif
+drafts/
+.DS_Store

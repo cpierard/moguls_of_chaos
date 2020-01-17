@@ -4,7 +4,7 @@ What are the moguls and why are they related to chaos? Mogul skiing is a ski dis
 
 ![](https://www.snowskool.com/blog-images/Scary_Prospect.jpg)
 
-This is a project for my Scientific computing class. I started this small project two years ago after reading *The Essence of Chaos* by E. Lorenz, but I couldn't finish it. So, I will use this project for my project of Sci. Comp. and as training for my very rusty Julia skills. In parallel, I will do the code in Python.
+This is a project for my Scientific computing class. I started this small project two years ago after reading *The Essence of Chaos* by Edward Norton Lorenz, but I couldn't finish it. So, I will use this project for my project of Sci. Comp. class and also as training for my very rusty Julia skills. In parallel, I will do the code in Python.
 
 ## Structure
 
@@ -16,4 +16,6 @@ Also, I put the explanation and the results in a blog post that you can find her
 
 - [x] Build the code in Julia.
 - [x] Build the code in Python.
-- [ ] ~Try parallelization in Julia for an ensemble of initial conditions.
+- [ ] ~Try parallelization in Julia for an ensemble of initial conditions.~
+
+## References

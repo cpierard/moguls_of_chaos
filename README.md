@@ -4,7 +4,7 @@ What are the moguls and why are they related to chaos? Mogul skiing is a ski dis
 
 This project aims to perform the small numerical experiment that Ed did and explained in his book *The Essence of Chaos*.
 
-I started this small project two years ago after reading the above-mentioned book, but I couldn't finish it, and given that I am required to do a small project for my scientific computing class, I will use this opportunity to finish once and for all this mini-project. Also, this problem is an excuse to refresh my very rusty Julia skills and to keep my Python skills fresh.
+I started this small project two years ago after reading the above-mentioned book, but I couldn't finish it, and given that I am required to do a small project for my scientific computing class, I will use this opportunity to finish once and for all this mini-project. Also, this problem is an excuse to refresh my very rusty Julia skills and to keep my Python skills sharp.
 
 ![](fig/shape_of_moguls.png)
 

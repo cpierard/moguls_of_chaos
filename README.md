@@ -6,13 +6,13 @@ This project aims to perform the small numerical experiment that Ed did and expl
 
 I started this small project two years ago after reading the above-mentioned book, but I couldn't finish it, and given that I am required to do a small project for my scientific computing class, I will use this opportunity to finish once and for all this mini-project. Also, this problem is an excuse to refresh my very rusty Julia skills and to keep my Python skills sharp.
 
-![](fig/shape_of_moguls.png)
+![](animations/b_05.gif)
 
 ## Structure
 
 You will find two Jupyter notebooks in this repo, one written in Julia and the other in Python. Both notebooks are similar and solve the same exercises. If you want to run one of these notebooks, I will suggest running the Julia one, because it is way faster, especially for computing the bifurcation diagram.
 
-Also, I put the explanation and the results (code free) in a blog post that you can find [here](https://cpierard.github.io/projects/moguls-of-chaos/).
+Also, I put the explanation and the results (code-free) in a blog post that you can find [here](https://cpierard.github.io/projects/moguls-of-chaos/).
 
 ## Objectives
 

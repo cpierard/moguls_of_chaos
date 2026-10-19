@@ -11,7 +11,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import confusion_matrix, classification_report, roc_curve, auc
 
 
-
 def load_trajectories(path, stride=1, wrap_y=False):
     """Return a dict with:
         state : (N, T, 2) float64, last axis = (y, v)
@@ -69,10 +68,32 @@ def to_torch_dataset(d, dtype=None):
     )
 
 
-#%%
+#%% Load the data and plot some snapshots (y wrapped)
 d = load_trajectories("data/sleds_b0.8_u3.5.zarr", wrap_y=True)
-print({k: v.shape for k, v in d.items() if k != "meta"})
-print(d["meta"])
 
 fig, axes = plot_trajectory_snapshots(d)
-# %%
+
+
+ 
+def prepare_data(path, val_size=0.1, test_size=0.1, random_state=42, dtype=torch.float32):
+    d = load_trajectories(path, wrap_y=True)
+    state = d["state"]                    # (N, T, 2) -> axis 0 = sleds
+    dt = d["meta"]["dt"]
+ 
+    # Split BY SLED (axis 0): each sled is a whole trajectory. Splitting individual
+    # time points would put neighbouring points of the same trajectory in train and test.
+    train_val, test = train_test_split(state, test_size=test_size, random_state=random_state)
+    train, val = train_test_split(train_val, test_size=val_size / (1 - test_size),
+                                  random_state=random_state)
+ 
+    # "Scaler.fit" on the training sleds only. These are plain constants that the
+    # model divides by internally; the data itself stays in physical units.
+    v_scale = float(train[..., 1].std())
+    dv_scale = float((np.diff(train[..., 1], axis=1) / dt).std())   # std of dv/dt
+ 
+    as_t = lambda a: torch.as_tensor(a, dtype=dtype)
+    return {
+        "train": as_t(train), "val": as_t(val), "test": as_t(test),
+        "t": as_t(d["t"]), "v_scale": v_scale, "dv_scale": dv_scale, "meta": d["meta"],
+    }
+ 

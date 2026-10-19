@@ -1,3 +1,5 @@
 .ipynb_checkpoints/
 drafts/
 .DS_Store
+data/
+*.zarr

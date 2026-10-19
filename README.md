@@ -18,6 +18,9 @@ Also, I put the explanation and the results (code-free) in a blog post that you 
 
 - [x] Build the code in Julia.
 - [x] Build the code in Python.
+- [ ] Train a NN on sled trajectories
+- [ ] Train a Neural ODE on trajectories
+- [ ] Comparisons physics based & to data driven
 
 ## References
 

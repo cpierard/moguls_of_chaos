@@ -1,0 +1,15 @@
+name: moguls
+channels:
+  - conda-forge
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - matplotlib
+  - numpy
+  - pandas
+  - pytorch
+  - scikit-learn
+  - scipy
+  - ipykernel
+  - zarr
+prefix: /Users/claudiopierard/miniconda3/envs/moguls

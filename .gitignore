@@ -3,3 +3,4 @@ drafts/
 .DS_Store
 data/
 *.zarr
+__pycache__/

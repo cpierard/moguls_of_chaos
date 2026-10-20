@@ -17,7 +17,6 @@ import torch.nn as nn
 from prepare_data import prepare_data
 
 # ------------------------------------------------------------- settings ----
-# ROOT = Path(__file__).resolve().parent.parent
 DATA = "data/sleds_b0.5_u3.5.zarr"
 OUT_DIR = Path("checkpoints")
 

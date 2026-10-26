@@ -4,3 +4,4 @@ drafts/
 data/
 *.zarr
 __pycache__/
+*.pyc

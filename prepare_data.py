@@ -53,7 +53,7 @@ def prepare_data(path, val_size=0.1, test_size=0.1, random_state=42, dtype=torch
         A dictionary containing the split tensors, time grid, velocity scales,
         and metadata.
     """
-    d = load_trajectories(path, wrap_y=True)
+    d = load_trajectories(path, wrap_y=False) # we need unwrapped y to train the NN
     state = d["state"] # (N, T, 2) -> axis 0 = sleds, axis 1 = time, axis 2 = (y, v)
     dt = d["meta"]["dt"]
 

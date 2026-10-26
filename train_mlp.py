@@ -21,9 +21,9 @@ from prepare_data import prepare_data
 plt.switch_backend("Agg")  # figures are only saved, no window is needed
 
 # ------------------------------------------------------ settings ---
-ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data" / "sleds_b0.5_u3.5_seed1.zarr"
-OUT_DIR = ROOT / "checkpoints"
+# ROOT = Path(__file__).resolve().parent.parent
+DATA = Path("data/sleds_b0.5_u3.5.zarr")
+OUT_DIR = Path("checkpoints")
 
 HIDDEN = 64                  # neurons per hidden layer
 STEP = 5                     # h = STEP * dt = 0.05 s: how far it jumps
@@ -34,32 +34,6 @@ SEED = 0
 ROLLOUT_SECONDS = (1, 3, 5, 10, 25)  # report rollout error at these t
 PLOT_STEPS = [0, 200, 500, 1000]     # data steps in the plot
 # ---------------------------------------------------------------------
-
-
-def wrap(d, Ly):
-    """Map values into the periodic interval [-Ly/2, Ly/2).
-
-    Positions such as y = 2 and y = -2 are the same physical point.
-    Applied to a position, this keeps it inside the domain. Applied to
-    a difference of positions, it gives the shortest signed distance
-    across the periodic boundary: a jump from y = 1.99 to y = -1.98 has
-    raw difference -3.97 but wrapped difference 0.03.
-
-    Parameters
-    ----------
-    d : torch.Tensor
-        Positions or position differences in meters, dtype float32,
-        any shape.
-    Ly : float
-        Period (length of the cross-slope domain) in meters.
-
-    Returns
-    -------
-    torch.Tensor
-        Same shape and dtype as ``d``, with every value in
-        [-Ly/2, Ly/2).
-    """
-    return (d + Ly / 2) % Ly - Ly / 2
 
 
 def make_features(y, v, t, meta, v_scale):
@@ -75,7 +49,7 @@ def make_features(y, v, t, meta, v_scale):
     y : torch.Tensor
         Cross-slope positions in meters, dtype float32, any shape
         ``(...)``. In practice ``(N,)`` in `rollout` and ``(N, n)`` in
-        `make_pairs`.
+        `make_pairs`. Wrapped or unwrapped gives the same features.
     v : torch.Tensor
         Cross-slope velocities in m/s, dtype float32, same shape as
         ``y``.
@@ -116,8 +90,8 @@ def make_pairs(data, t, meta, v_scale):
     ----------
     data : torch.Tensor
         Trajectories, dtype float32, shape ``(N, T, 2)``: N sleds, T
-        time steps, last axis ``(y, v)`` with ``y`` wrapped to
-        [-Ly/2, Ly/2) in meters and ``v`` in m/s.
+        time steps, last axis ``(y, v)`` with ``y`` in meters
+        (unwrapped, continuous in time) and ``v`` in m/s.
     t : torch.Tensor
         Time grid in seconds, dtype float32, shape ``(T,)``.
     meta : dict
@@ -133,7 +107,7 @@ def make_pairs(data, t, meta, v_scale):
         (see `make_features`).
     Y : torch.Tensor
         dtype float32, shape ``(M, 2)``. Columns ``(dy, dv)``: the
-        change of position (wrapped, meters) and of velocity (m/s) over
+        change of position (meters) and of velocity (m/s) over
         ``STEP`` data steps. Not standardized.
 
     Notes
@@ -145,8 +119,7 @@ def make_pairs(data, t, meta, v_scale):
     now, nxt = data[:, idx], data[:, idx + STEP]  # (N, n, 2)
     X = make_features(now[..., 0], now[..., 1], t[idx], meta,
                       v_scale).reshape(-1, 5)
-    # y is wrapped in the data, so take the periodic difference
-    dy = wrap(nxt[..., 0] - now[..., 0], meta["Ly"])
+    dy = nxt[..., 0] - now[..., 0]
     dv = nxt[..., 1] - now[..., 1]
     return X, torch.stack([dy, dv], dim=-1).reshape(-1, 2)
 
@@ -189,15 +162,14 @@ def rollout(net, z0, t, meta, v_scale, Y_mean, Y_std):
         dtype float32, shape ``(N, n_steps + 1, 2)`` with
         ``n_steps = (T - 1) // STEP``. Entry ``[:, k]`` is the
         predicted state ``(y, v)`` at time ``t[k * STEP]``; ``y`` is
-        wrapped and ``[:, 0]`` equals ``z0``.
+        not wrapped and ``[:, 0]`` equals ``z0``.
     """
     n_steps = (len(t) - 1) // STEP
     z, out = z0, [z0]
     for n in range(n_steps):
         inc = net(make_features(z[:, 0], z[:, 1], t[n * STEP], meta,
                                 v_scale)) * Y_std + Y_mean
-        z = torch.stack([wrap(z[:, 0] + inc[:, 0], meta["Ly"]),
-                         z[:, 1] + inc[:, 1]], dim=-1)
+        z = z + inc  # columns of inc are (dy, dv)
         out.append(z)
     return torch.stack(out, dim=1)
 
@@ -207,20 +179,22 @@ def plot_phase_space(true, pred, meta, path):
 
     One column per entry of ``PLOT_STEPS``, titled with the distance
     travelled down-slope (``step * dt * u``, in meters). Top row: true
-    ``(y, v)`` of all sleds. Bottom row: network rollout.
+    ``(y, v)`` of all sleds. Bottom row: network rollout. The
+    unwrapped ``y`` is wrapped into [-Ly/2, Ly/2) for display only.
 
     Parameters
     ----------
     true : numpy.ndarray
         True states, dtype float32, shape ``(N, n, 2)``, sampled every
         ``STEP`` data steps (``n = (T - 1) // STEP + 1``). Last axis
-        ``(y, v)``.
+        ``(y, v)`` with ``y`` unwrapped.
     pred : numpy.ndarray
         Predicted states from `rollout`, converted to numpy. Same
         shape and dtype as ``true``.
     meta : dict
         Dataset attributes. Keys used: ``"dt"`` (data time step in
-        seconds, float) and ``"u"`` (down-slope speed in m/s, float).
+        seconds), ``"u"`` (down-slope speed in m/s) and ``"Ly"``
+        (cross-slope period in meters), all float.
     path : pathlib.Path or str
         Output PNG file.
 
@@ -229,13 +203,14 @@ def plot_phase_space(true, pred, meta, path):
     None
         The figure is written to ``path`` and closed.
     """
+    half = meta["Ly"] / 2
     fig, axes = plt.subplots(2, len(PLOT_STEPS), sharex=True, sharey=True,
                              figsize=(3 * len(PLOT_STEPS), 6))
     for j, step in enumerate(PLOT_STEPS):
         n = step // STEP
         for row, data in enumerate((true, pred)):
-            axes[row, j].scatter(data[:, n, 0], data[:, n, 1], s=2,
-                                 color="k")
+            y = (data[:, n, 0] + half) % meta["Ly"] - half  # display only
+            axes[row, j].scatter(y, data[:, n, 1], s=2, color="k")
         axes[0, j].set_title(f"{round(step * meta['dt'] * meta['u'])} m")
         axes[1, j].set_xlabel("y (m)")
     axes[0, 0].set_ylabel("true: v (m/s)")
@@ -303,15 +278,15 @@ def main():
     val_traj = D["val"]
     pred = rollout(net, val_traj[:, 0], t, meta, v_scale, Y_mean, Y_std)
     true = val_traj[:, ::STEP]
-    print("\nrollout error (rms over validation sleds); the data's own "
-          f"spread is y ~ {meta['Ly'] / math.sqrt(12):.2f} m, "
-          f"v ~ {v_scale:.2f} m/s")
+    print("\nrollout error: rms over the validation sleds, next to the "
+          "spread (std) of the true values at that time")
     for s in ROLLOUT_SECONDS:
         n = round(s / (STEP * meta["dt"]))
-        ey = wrap(pred[:, n, 0] - true[:, n, 0],
-                  meta["Ly"]).pow(2).mean().sqrt().item()
+        ey = (pred[:, n, 0] - true[:, n, 0]).pow(2).mean().sqrt().item()
         ev = (pred[:, n, 1] - true[:, n, 1]).pow(2).mean().sqrt().item()
-        print(f"  t = {s:2d} s: y {ey:.3f} m, v {ev:.3f} m/s")
+        print(f"  t = {s:2d} s: y {ey:.3f} m (spread "
+              f"{true[:, n, 0].std().item():.2f}), v {ev:.3f} m/s (spread "
+              f"{true[:, n, 1].std().item():.2f})")
 
     OUT_DIR.mkdir(exist_ok=True)
     plot_phase_space(true.numpy(), pred.numpy(), meta,

@@ -1,4 +1,4 @@
-"""Plain neural network (no ODE solver): learn the one-step map  state(t) -> state(t + h).
+"""Plain neural network: learn the one-step map  state(t) -> state(t + h).
 
 Inputs : 5 features of (y, v, t)       Outputs: the change (dy, dv) over h = STEP * dt
 Long trajectories come from feeding the network its own output again and again.
@@ -7,13 +7,11 @@ Edit the settings below and run:   python python/train_mlp.py
 """
 import math
 from pathlib import Path
-
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-
 from prepare_data import prepare_data
 
 # ------------------------------------------------------------- settings ----
@@ -32,12 +30,14 @@ PLOT_STEPS = [0, 200, 500, 1000]      # data steps shown in the phase-space figu
 
 
 def wrap(d, Ly):
-    """Map into [-Ly/2, Ly/2): y = 2 and y = -2 are the same point."""
+    """Assuming a tile with periodic boundaries.
+    Map into [-Ly/2, Ly/2): y = 2 and y = -2 are the same point."""
     return (d + Ly / 2) % Ly - Ly / 2
 
 
 def make_features(y, v, t, meta, v_scale):
-    """(y, v, t) -> 5 numbers per sled. y, v: (...,) tensors; t: scalar or broadcastable."""
+    """(y, v, t) -> 5 numbers per sled (sin(qy), cos(qy), v/v_scale, sin(px), cos(px)) 
+    y, v: (...,) tensors; t: scalar or broadcastable."""
     p, q = 2 * math.pi / meta["Lx"], 2 * math.pi / meta["Ly"]
     x = (meta["u"] * t).expand_as(y)                 # x0 = 0 in the data
     return torch.stack([torch.sin(q * y), torch.cos(q * y), v / v_scale,
@@ -73,7 +73,10 @@ def plot_phase_space(true, pred, meta, path):
     for j, step in enumerate(PLOT_STEPS):
         n = step // STEP
         for row, data in enumerate((true, pred)):
-            axes[row, j].scatter(data[:, n, 0], data[:, n, 1], s=2, color="k")
+            if n < data.shape[1]:
+                axes[row, j].scatter(data[:, n, 0], data[:, n, 1], s=2, color="k")
+            else:
+                axes[row, j].set_title(f"Step {step} out of bounds")
         axes[0, j].set_title(f"{round(step * meta['dt'] * meta['u'])} m")
         axes[1, j].set_xlabel("y (m)")
     axes[0, 0].set_ylabel("true: v (m/s)")
@@ -127,9 +130,19 @@ def main():
 
     OUT_DIR.mkdir(exist_ok=True)
     plot_phase_space(true.numpy(), pred.numpy(), meta, OUT_DIR / "mlp_phase_space.png")
-    torch.save({"state_dict": net.state_dict(), "Y_mean": Y_mean, "Y_std": Y_std,
-                "v_scale": v_scale, "hidden": HIDDEN, "step": STEP, "meta": meta},
-               OUT_DIR / "mlp.pt")
+    torch.save({
+        "model": {
+            "state_dict": net.state_dict(),
+            "hidden": HIDDEN,
+            "step": STEP,
+        },
+        "normalization": {
+            "Y_mean": Y_mean,
+            "Y_std": Y_std,
+            "v_scale": v_scale,
+        },
+        "meta": meta
+    }, OUT_DIR / "mlp.pt")
     print(f"saved {OUT_DIR / 'mlp_phase_space.png'} and mlp.pt")
 
 

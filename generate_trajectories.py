@@ -7,6 +7,7 @@ import zarr
 import matplotlib.pyplot as plt
 
 #%%
+# Data class contains the constant and variables assumed constant
 @dataclass(frozen=True)
 class SledParams:
     g: float = 9.81    # gravity (m/s^2)
@@ -19,7 +20,9 @@ class SledParams:
 
 
 def rhs(y, v, x, P):
-    """Cross-slope dynamics. y, v (and x) can be arrays: one entry per sled."""
+    """Right hand side equation for the sled. Assuming u is constant.
+    The state variables are y and v.
+    """
     p, q = 2 * np.pi / P.Lx, 2 * np.pi / P.Ly
     sx, cx = np.sin(p * x), np.cos(p * x)
     sy, cy = np.sin(q * y), np.cos(q * y)
@@ -45,7 +48,8 @@ def rk4_step(y, v, x, dt, P):
 
 
 def simulate(P, x0, y0, v0, dt, n_steps):
-    """All sleds advance together; the only Python loop is over time."""
+    """Vectorized loop, in which N sleds trajectories are integrated at the same dt.
+    P is the dataclass, x0, y0, v0 are the initial condition vectores, dt and n_steps ar time variables."""
     states = np.empty((len(y0), n_steps + 1, 2))
     y, v = y0, v0
     states[:, 0, 0], states[:, 0, 1] = y, v
@@ -56,6 +60,7 @@ def simulate(P, x0, y0, v0, dt, n_steps):
 
 
 def save(path, P, states, t, x0, dt, seed):
+    """Save the trajectories into a zarr. These are going to be used for training the NN."""
     root = zarr.open_group(path, mode="w")
     # chunk along sleds so reading a batch of whole trajectories touches few chunks
     root.create_array("states", data=states, chunks=(min(256, len(x0)), states.shape[1], 2))
@@ -64,18 +69,18 @@ def save(path, P, states, t, x0, dt, seed):
     root.attrs.update({**asdict(P), "dt": dt, "seed": seed, "state_names": "y,v"})
 
 
-# %%
+# %% Setting up parameters
 seed = 1234
 rng = np.random.default_rng(seed)
-N = 8000
+N = 8000 # number of sleds
 n_steps = 2500
 dt = 0.01
 x0 = np.zeros(N)
-y0 = SledParams().Ly * (rng.random(N) - 0.5)   # uniform in [-Ly/2, Ly/2)
-v0 = 10.0 * (rng.random(N) - 0.5)              # uniform in [-5, 5)
+y0 = SledParams().Ly * (rng.random(N) - 0.5) # uniform in [-Ly/2, Ly/2) 
+v0 = 10.0 * (rng.random(N) - 0.5) # uniform in [-5, 5)
 t = np.arange(n_steps + 1) * dt
-b_range = np.linspace(0.1, 0.8, 8)
-out = "data"
+b_range = np.linspace(0.1, 0.8, 8) # Defining a range of height of bumps b to simulate
+out = "data" 
 
 for b in b_range:
     P = SledParams(b=b)

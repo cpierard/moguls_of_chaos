@@ -1,39 +1,14 @@
+#%%
 """Plain neural network (no ODE solver) for the sled on moguls.
-
-The network learns the one-step map ``state(t) -> state(t + h)`` with
-``h = STEP * dt``. Its inputs are 5 features of (y, v, t) and its
-outputs are the changes (dy, dv) over h. Long trajectories are obtained
-by feeding the network its own output again and again.
-
-Edit the settings below and run::
-
-    python python/train_mlp.py
 """
 import math
 from pathlib import Path
-
 import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
-
 from prepare_data import prepare_data
-
-plt.switch_backend("Agg")  # figures are only saved, no window is needed
-
-# ------------------------------------------------------ settings ---
-# ROOT = Path(__file__).resolve().parent.parent
-DATA = Path("data/sleds_b0.5_u3.5.zarr")
-OUT_DIR = Path("checkpoints")
-
-HIDDEN = 64                  # neurons per hidden layer
-STEP = 5                     # h = STEP * dt = 0.05 s: how far it jumps
-BATCH = 4096
-LR = 1e-3
-EPOCHS = 20
-SEED = 0
-ROLLOUT_SECONDS = (1, 3, 5, 10, 25)  # report rollout error at these t
-PLOT_STEPS = [0, 200, 500, 1000]     # data steps in the plot
-# ---------------------------------------------------------------------
+import matplotlib.animation as animation
+import numpy as np
 
 
 def make_features(y, v, t, meta, v_scale):
@@ -118,7 +93,7 @@ def make_pairs(data, t, meta, v_scale):
     idx = torch.arange(0, data.shape[1] - STEP, STEP)
     now, nxt = data[:, idx], data[:, idx + STEP]  # (N, n, 2)
     X = make_features(now[..., 0], now[..., 1], t[idx], meta,
-                      v_scale).reshape(-1, 5)
+                      v_scale).reshape(-1, 5) # (M, 5)
     dy = nxt[..., 0] - now[..., 0]
     dv = nxt[..., 1] - now[..., 1]
     return X, torch.stack([dy, dv], dim=-1).reshape(-1, 2)
@@ -164,12 +139,12 @@ def rollout(net, z0, t, meta, v_scale, Y_mean, Y_std):
         predicted state ``(y, v)`` at time ``t[k * STEP]``; ``y`` is
         not wrapped and ``[:, 0]`` equals ``z0``.
     """
-    n_steps = (len(t) - 1) // STEP
-    z, out = z0, [z0]
+    n_steps = (len(t) - 1) // STEP # number of steps to predict
+    z, out = z0, [z0] # z is the current state, out will hold all predicted states
     for n in range(n_steps):
-        inc = net(make_features(z[:, 0], z[:, 1], t[n * STEP], meta,
+        increase = net(make_features(z[:, 0], z[:, 1], t[n * STEP], meta,
                                 v_scale)) * Y_std + Y_mean
-        z = z + inc  # columns of inc are (dy, dv)
+        z = z + increase  # columns of increase are (dy, dv)
         out.append(z)
     return torch.stack(out, dim=1)
 
@@ -209,8 +184,13 @@ def plot_phase_space(true, pred, meta, path):
     for j, step in enumerate(PLOT_STEPS):
         n = step // STEP
         for row, data in enumerate((true, pred)):
+            if row == 0:
+                color = "C0"
+            else:
+                color = "C1"    
+
             y = (data[:, n, 0] + half) % meta["Ly"] - half  # display only
-            axes[row, j].scatter(y, data[:, n, 1], s=2, color="k")
+            axes[row, j].scatter(y, data[:, n, 1], s=2, color=color)
         axes[0, j].set_title(f"{round(step * meta['dt'] * meta['u'])} m")
         axes[1, j].set_xlabel("y (m)")
     axes[0, 0].set_ylabel("true: v (m/s)")
@@ -220,82 +200,171 @@ def plot_phase_space(true, pred, meta, path):
     plt.close(fig)
 
 
-def main():
-    """Train the one-step network, test its rollout and save results.
+#%% ------------------------------------------------------ settings ---
 
-    Steps: load and split the data (`prepare_data`); build the (input,
-    target) pairs and standardize the targets with training statistics;
-    train the network with Adam, printing the one-step validation error
-    per epoch; roll out the validation sleds from t = 0 and print the
-    rms error at the times in ``ROLLOUT_SECONDS``; save the phase-space
-    figure and the model.
+DATA = Path("data/sleds_b0.5_u3.5.zarr")
+OUT_DIR = Path("checkpoints")
 
-    All settings are module constants: ``DATA``, ``OUT_DIR``,
-    ``HIDDEN``, ``STEP``, ``BATCH``, ``LR``, ``EPOCHS``, ``SEED``,
-    ``ROLLOUT_SECONDS`` and ``PLOT_STEPS``.
+HIDDEN = 64                  # neurons per hidden layer
+STEP = 1                     # h = STEP * dt = 0.05 s: how far it jumps
+BATCH = 4096
+LR = 1e-3
+EPOCHS = 20
+SEED = 0
+ROLLOUT_SECONDS = (1, 3, 5, 10, 25)  # report rollout error at these t
+PLOT_STEPS = [0, 200, 500, 1000]     # data steps in the plot
 
-    Returns
-    -------
-    None
-        Prints progress to stdout and writes two files to ``OUT_DIR``:
-        ``mlp_phase_space.png`` and ``mlp.pt`` (a dict with the
-        ``state_dict``, ``Y_mean``, ``Y_std``, ``v_scale``, ``hidden``,
-        ``step`` and ``meta``).
-    """
-    torch.manual_seed(SEED)
-    D = prepare_data(DATA)
-    meta, t, v_scale = D["meta"], D["t"], D["v_scale"]
+#%% ------------------------ TRAIN -------------------------------
+torch.manual_seed(SEED)
+D = prepare_data(DATA)
+meta, t, v_scale = D["meta"], D["t"], D["v_scale"]
 
-    X_tr, Y_tr = make_pairs(D["train"], t, meta, v_scale)
-    X_va, Y_va = make_pairs(D["val"], t, meta, v_scale)
-    # StandardScaler on the TARGETS, fitted on the training pairs only.
-    # Here (unlike the ODE state) it is fine: dy and dv are ordinary
-    # regression targets.
-    Y_mean, Y_std = Y_tr.mean(0), Y_tr.std(0)
-    Y_tr, Y_va = (Y_tr - Y_mean) / Y_std, (Y_va - Y_mean) / Y_std
-    print(f"training pairs {tuple(X_tr.shape)}, "
-          f"validation pairs {tuple(X_va.shape)}")
+X_tr, Y_tr = make_pairs(D["train"], t, meta, v_scale) # X is input features, Y is target (dy, dv)
+X_va, Y_va = make_pairs(D["val"], t, meta, v_scale) # validation pairs
+# StandardScaler on the TARGETS, fitted on the training pairs only.
+# Here (unlike the ODE state) it is fine: dy and dv are ordinary
+# regression targets.
+Y_mean, Y_std = Y_tr.mean(0), Y_tr.std(0)
+Y_tr, Y_va = (Y_tr - Y_mean) / Y_std, (Y_va - Y_mean) / Y_std
+print(f"training pairs {tuple(X_tr.shape)}, "
+        f"validation pairs {tuple(X_va.shape)}")
 
-    net = nn.Sequential(nn.Linear(5, HIDDEN), nn.Tanh(),
-                        nn.Linear(HIDDEN, HIDDEN), nn.Tanh(),
-                        nn.Linear(HIDDEN, 2))
-    opt = torch.optim.Adam(net.parameters(), lr=LR)
+#building the network and optimizer
+net = nn.Sequential(nn.Linear(5, HIDDEN), nn.Tanh(),
+                    nn.Linear(HIDDEN, HIDDEN), nn.Tanh(),
+                    nn.Linear(HIDDEN, 2))
+opt = torch.optim.Adam(net.parameters(), lr=LR)
 
-    for epoch in range(1, EPOCHS + 1):
-        perm = torch.randperm(len(X_tr))
-        for i in range(0, len(perm), BATCH):
-            b = perm[i:i + BATCH]
-            loss = ((net(X_tr[b]) - Y_tr[b]) ** 2).mean()
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-        with torch.no_grad():
-            val = ((net(X_va) - Y_va) ** 2).mean().item()
-        print(f"epoch {epoch:3d} | val one-step MSE "
-              f"(1.0 = predicting the mean): {val:.5f}")
-
-    # The real test: feed the network its own output, starting at t = 0
-    val_traj = D["val"]
-    pred = rollout(net, val_traj[:, 0], t, meta, v_scale, Y_mean, Y_std)
-    true = val_traj[:, ::STEP]
-    print("\nrollout error: rms over the validation sleds, next to the "
-          "spread (std) of the true values at that time")
-    for s in ROLLOUT_SECONDS:
-        n = round(s / (STEP * meta["dt"]))
-        ey = (pred[:, n, 0] - true[:, n, 0]).pow(2).mean().sqrt().item()
-        ev = (pred[:, n, 1] - true[:, n, 1]).pow(2).mean().sqrt().item()
-        print(f"  t = {s:2d} s: y {ey:.3f} m (spread "
-              f"{true[:, n, 0].std().item():.2f}), v {ev:.3f} m/s (spread "
-              f"{true[:, n, 1].std().item():.2f})")
-
-    OUT_DIR.mkdir(exist_ok=True)
-    plot_phase_space(true.numpy(), pred.numpy(), meta,
-                     OUT_DIR / "mlp_phase_space.png")
-    torch.save({"state_dict": net.state_dict(), "Y_mean": Y_mean,
-                "Y_std": Y_std, "v_scale": v_scale, "hidden": HIDDEN,
-                "step": STEP, "meta": meta}, OUT_DIR / "mlp.pt")
-    print(f"saved {OUT_DIR / 'mlp_phase_space.png'} and mlp.pt")
+#
+print("One-step validation MSE is in standardized units: "
+        "1.0 = no better than predicting the mean, 0.0 = perfect.")
 
 
-if __name__ == "__main__":
-    main()
+#%%
+for epoch in range(1, EPOCHS + 1):
+    # training the network in batches
+    for i in range(0, len(X_tr), BATCH):
+        b = slice(i, i + BATCH) # selecting a batch of indices
+        loss = ((net(X_tr[b]) - Y_tr[b]) ** 2).mean() # mean squared error loss
+        opt.zero_grad()
+        loss.backward() # computing gradients
+        opt.step() # updating weights
+    with torch.no_grad():
+        val = ((net(X_va) - Y_va) ** 2).mean().item()
+    print(f"epoch {epoch:3d}/{EPOCHS} | val one-step MSE = {val:.5f}")
+
+#%% ----------------------- Validation -------------------------
+val_traj = D["val"]
+pred = rollout(net, val_traj[:, 0], t, meta, v_scale, Y_mean, Y_std)
+true = val_traj[:, ::STEP]
+print("\nRollout from t = 0 on the validation sleds, where the "
+        "network feeds on its own output.\n"
+        "error = rms over sleds of (prediction - truth); "
+        "spread = std of the true values at that time.\n"
+        "An error close to the spread means no skill is left.")
+
+for s in ROLLOUT_SECONDS:
+    n = round(s / (STEP * meta["dt"]))
+    ey = (pred[:, n, 0] - true[:, n, 0]).pow(2).mean().sqrt().item()
+    ev = (pred[:, n, 1] - true[:, n, 1]).pow(2).mean().sqrt().item()
+    sy = true[:, n, 0].std().item()
+    sv = true[:, n, 1].std().item()
+    print(f"  t = {s:2d} s | y: error = {ey:6.3f} m "
+            f"(spread = {sy:5.2f} m) | v: error = {ev:5.3f} m/s "
+            f"(spread = {sv:4.2f} m/s)")
+
+
+#%% Save the network and a figure of the phase space
+OUT_DIR.mkdir(exist_ok=True)
+# plot_phase_space(true.numpy(), pred.numpy(), meta,
+#                     OUT_DIR / "mlp_phase_space.png")
+torch.save({"state_dict": net.state_dict(), "Y_mean": Y_mean,
+            "Y_std": Y_std, "v_scale": v_scale, "hidden": HIDDEN,
+            "step": STEP, "meta": meta}, OUT_DIR / f"mlp_b{meta['b']:.2f}_u{meta['u']:.2f}.pt")
+print(f"saved {OUT_DIR / f"mlp_b{meta['b']:.2f}_u{meta['u']:.2f}.pt"}")
+
+#%% ----------------------- Test -------------------------
+
+test_traj = D["test"]
+pred = rollout(net, test_traj[:, 0], t, meta, v_scale, Y_mean, Y_std)
+# make x. It's the same for all sleds.
+x_pred = meta["u"] * t[::STEP]
+x = meta["u"] * t
+
+sleds = torch.randperm(test_traj.shape[0])[:7]
+
+#%%
+fig, axes = plt.subplots(1, 7, sharex=True, sharey=True, figsize=(8.8, 3))
+for ax, sled in zip(axes, sleds):
+    sled = sled.item()
+    ax.plot(test_traj[sled, :, 0], x, label="True")
+    ax.plot(pred[sled, :, 0], x_pred, label="Predicted")
+
+    ax.invert_yaxis()
+    ax.set_aspect('equal', adjustable='box')
+    ax.grid()
+    ax.set_xlabel('')
+    ax.set_title(f'sled {sled}')
+
+fig.supxlabel('y - Crossslope position (m)', )
+fig.supylabel('x - Downslope position (m)', )
+axes[0].legend(loc='upper center', ncol=2, bbox_to_anchor=(0.9, -0.13))
+axes[-1].text(-70, 115, f'b = {meta["b"]:.2f} m, u = {meta["u"]:.2f} m/s', va='center', fontsize=10)
+fig.savefig(f"fig/traj_test_b{meta['b']:.2f}_u{meta['u']:.2f}.png", dpi=150)
+
+#%% plot the average cross-slope position and velocity over time for the test sleds
+rmse_pred = ((pred - test_traj[:, ::STEP]) ** 2).mean(0).sqrt()
+
+plt.plot(t[::STEP], rmse_pred[:, 0], label='y - Crossslope position (m)')
+# plt.plot(t, rmse_true[:, 0], label='y - Crossslope position (m) spread')
+
+plt.plot(t[::STEP], rmse_pred[:, 1], label='v - Crossslope velocity (m/s)')
+plt.xlabel('Time (s)')
+plt.ylabel('RMS Error')
+plt.title(f'b = {meta["b"]:.2f} m, u = {meta["u"]:.2f} m/s')
+plt.legend()
+plt.savefig(f"fig/mlp_rms_error_b{meta['b']:.2f}_u{meta['u']:.2f}.png", dpi=150)
+
+#%% poincare maps
+plot_phase_space(test_traj[:, ::STEP].numpy(), pred.numpy(), meta,
+                    f"fig/mlp_phase_space_b{meta['b']:.2f}_u{meta['u']:.2f}.png")
+
+#%% make a gif animation of the test sleds and pred of the phase space
+
+fig, axes = plt.subplots(1, 2, sharex=True, sharey=True, figsize=(6, 3.5))
+half = meta["Ly"] / 2
+axes[0].set_xlabel("y (m)")
+axes[1].set_xlabel("y (m)")
+axes[0].set_ylabel("v (m/s)")
+axes[0].set_title(f"True at x={x[0]:.1f} m")
+axes[1].set_title(f"Predicted at x={x_pred[0]:.1f} m")
+axes[0].set_xlim(-half, half)
+axes[1].set_xlim(-half, half)
+axes[0].set_ylim(test_traj[:, :, 1].min(), test_traj[:, :, 1].max())
+axes[1].set_ylim(pred[:, :, 1].min(), pred[:, :, 1].max())
+axes[0].text(.5, -6, f"b = {meta['b']:.2f} m", fontsize=10, va='center')
+axes[1].text(.5, -6, f"b = {meta['b']:.2f} m", fontsize=10, va='center')
+fig.tight_layout()
+
+def update(frame):  
+    axes[0].clear()
+    axes[1].clear()
+    y_true = (test_traj[:, frame, 0] + half) % meta["Ly"] - half
+    y_pred = (pred[:, frame, 0] + half) % meta["Ly"] - half
+    axes[0].scatter(y_true, test_traj[:, frame, 1], s=2, color="C0")
+    axes[1].scatter(y_pred, pred[:, frame, 1], s=2, color="C1")
+    axes[0].set_title(f"True at x={x[frame]:.1f} m")
+    axes[1].set_title(f"Predicted at x={x_pred[frame]:.1f} m")
+    axes[0].set_xlim(-half, half)
+    axes[1].set_xlim(-half, half)
+    axes[0].set_ylim(test_traj[:, :, 1].min(), test_traj[:, :, 1].max())
+    axes[1].set_ylim(pred[:, :, 1].min(), pred[:, :, 1].max())
+    axes[0].text(.5, -6, f"b = {meta['b']:.2f} m", fontsize=10, va='center')
+    axes[1].text(.5, -6, f"b = {meta['b']:.2f} m", fontsize=10, va='center')    
+    
+ani = animation.FuncAnimation(fig, update, frames=range(0, 500, STEP*2), repeat=False)
+ani.save(f"animations/mlp_phase_space_b{meta['b']:.2f}_u{meta['u']:.2f}.gif", writer="imagemagick", fps=60, dpi=100)
+plt.close(fig)
+
+
+# %%
